@@ -37,7 +37,6 @@ readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly PURPLE='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly MAGENTA='\033[0;35m'
 readonly BOLD='\033[1m'
 readonly NC='\033[0m' # No Color
 
@@ -244,8 +243,8 @@ prompt_configuration() {
     read -r -p "🎨 Frontend service port [3000]: " FRONTEND_PORT
     FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
-    read -r -p "🔧 Backend service port [8000]: " BACKEND_PORT
-    BACKEND_PORT="${BACKEND_PORT:-8000}"
+    BACKEND_PORT="8000"
+    log_info "Backend service port is fixed to 8000 for Gunicorn/systemd compatibility."
 
     read -r -p "🗄️  Database host [127.0.0.1]: " DB_HOST
     DB_HOST="${DB_HOST:-127.0.0.1}"
@@ -431,7 +430,7 @@ setup_backend() {
     log_info "Installing Python GDAL binding pinned to system GDAL version: $system_gdal_version"
     "$pip_bin" install "GDAL==$system_gdal_version"
 
-    python_gdal_version="$($python_bin -c "import importlib.metadata as m; print(m.version('GDAL'))")"
+    python_gdal_version="$(get_python_gdal_version "$python_bin")"
 
     if [[ "$python_gdal_version" != "$system_gdal_version" ]]; then
         log_error "GDAL version mismatch detected."
@@ -445,7 +444,7 @@ setup_backend() {
 
     "$pip_bin" install -r "$backend_dir/requirements.txt"
 
-    python_gdal_version="$($python_bin -c "import importlib.metadata as m; print(m.version('GDAL'))")"
+    python_gdal_version="$(get_python_gdal_version "$python_bin")"
     if [[ "$python_gdal_version" != "$system_gdal_version" ]]; then
         log_error "GDAL version mismatch detected after requirements installation."
         echo "System GDAL: $system_gdal_version"
@@ -472,8 +471,43 @@ setup_backend() {
     log_success "Backend setup completed"
 }
 
+get_python_gdal_version() {
+    local python_bin="$1"
+    local version
+
+    set +e
+    version="$("$python_bin" <<'EOF_PY'
+import importlib.metadata
+import sys
+
+try:
+    print(importlib.metadata.version("GDAL"))
+except importlib.metadata.PackageNotFoundError:
+    sys.exit(42)
+EOF_PY
+)"
+    local status=$?
+    set -e
+
+    if [[ "$status" -eq 42 ]]; then
+        log_error "Python GDAL package is missing from the virtual environment."
+        echo "Fix:"
+        echo "  $python_bin -m pip install GDAL==$(gdal-config --version)"
+        exit 1
+    fi
+
+    if [[ "$status" -ne 0 || -z "$version" ]]; then
+        log_error "Unable to determine Python GDAL version."
+        exit 1
+    fi
+
+    echo "$version"
+}
+
 run_download_countries_with_guard() {
     local python_bin="$1"
+    local manual_command
+    manual_command="cd $(pwd) && $python_bin manage.py download-countries"
     local mem_available_kb
     mem_available_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
 
@@ -491,7 +525,7 @@ run_download_countries_with_guard() {
             log_warning "MemAvailable is ${mem_available_mb} MB (< 1800 MB)."
             log_warning "The download-countries command may be OOM-killed on low-memory hosts."
             log_warning "If this happens, add swap or free memory, then run manually:"
-            log_warning "  python manage.py download-countries"
+            log_warning "  $manual_command"
             log_warning "Swap example:"
             log_warning "  sudo fallocate -l 2G /swapfile"
             log_warning "  sudo chmod 600 /swapfile"
@@ -515,7 +549,7 @@ run_download_countries_with_guard() {
     set -e
 
     if [[ "$download_exit_code" -eq 137 ]]; then
-        log_error "The download-countries command was killed due to insufficient memory. Try freeing RAM or adding swap, then run: python manage.py download-countries manually."
+        log_error "The download-countries command was killed due to insufficient memory. Try freeing RAM or adding swap, then run this manually: $manual_command"
         return
     fi
 
