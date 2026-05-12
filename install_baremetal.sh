@@ -507,7 +507,7 @@ EOF_PY
 run_download_countries_with_guard() {
     local python_bin="$1"
     local manual_command
-    manual_command="cd $(pwd) && $python_bin manage.py download-countries"
+    manual_command="cd \"$PWD\" && \"$python_bin\" manage.py download-countries"
     local mem_available_kb
     mem_available_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
 
@@ -564,13 +564,17 @@ run_download_countries_with_guard() {
 create_or_update_superuser() {
     local python_bin="$1"
 
-    "$python_bin" manage.py shell <<EOF_SUPERUSER
+    ADVENTURELOG_ADMIN_USERNAME="$ADMIN_USERNAME" \
+    ADVENTURELOG_ADMIN_EMAIL="$ADMIN_EMAIL" \
+    ADVENTURELOG_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    "$python_bin" manage.py shell <<'EOF_SUPERUSER'
+import os
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
-username = "$ADMIN_USERNAME"
-email = "$ADMIN_EMAIL"
-password = "$ADMIN_PASSWORD"
+username = os.environ["ADVENTURELOG_ADMIN_USERNAME"]
+email = os.environ["ADVENTURELOG_ADMIN_EMAIL"]
+password = os.environ["ADVENTURELOG_ADMIN_PASSWORD"]
 
 user, created = User.objects.get_or_create(username=username, defaults={"email": email, "is_superuser": True, "is_staff": True})
 if created:
